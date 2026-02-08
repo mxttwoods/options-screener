@@ -1,4 +1,15 @@
 *.xlsx
-cli/iv_cache.db
 *.pyc
+cli/iv_cache.db
+
+# Python
+__pycache__/
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Project artifacts
 outputs/
+executed/
+errors/
