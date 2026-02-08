@@ -1,3 +1,4 @@
 *.xlsx
 cli/iv_cache.db
 *.pyc
+outputs/
