@@ -6,16 +6,19 @@ This repository is organized around research notebooks for options screening and
 
 ### Active Notebooks
 
-| Notebook                         | Role             | Description                                                                                                    |
-| -------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------- |
-| `bto_call_put_screener.ipynb`    | Screener + Model | Multi-horizon BTO discovery for calls and puts (short, medium, LEAPS).                                         |
-| `leaps_discovery_screener.ipynb` | Screener         | Automated US equity market scan, six-factor scoring, watchlist export.                                         |
-| `leaps_trade_readiness.ipynb`    | Model            | Deep-dive Greeks, risk analysis, IV timing, pre-trade checklist for conviction picks.                          |
-| `iv_strategy_analysis.ipynb`     | Screener + Model | IV scoring, covered calls, CSPs, LEAP+put combos, Kelly sizing. Set `QUICK_SCAN=True` for scorecard-only mode. |
+| Notebook                         | Role             | Description                                                                                                                                       |
+| -------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bto_call_put_screener.ipynb`    | Screener + Model | Multi-horizon BTO discovery for calls and puts (short, medium, LEAPS).                                                                            |
+| `leaps_discovery_screener.ipynb` | Screener         | Automated US equity market scan, six-factor scoring, watchlist export.                                                                            |
+| `leaps_trade_readiness.ipynb`    | Model            | Deep-dive Greeks, risk analysis, IV timing, pre-trade checklist for conviction picks.                                                             |
+| `iv_strategy_analysis.ipynb`     | Screener + Model | IV scoring, covered calls, CSPs, LEAP+put combos, Kelly sizing. Set `QUICK_SCAN=True` for scorecard-only mode.                                    |
+| `call_fan_discovery.ipynb`       | Screener + Model | Build fans of calls across all expirations (weeklies through LEAPS) per ticker with strike-zone filtering, fan-level scoring, and portfolio plan. |
 
 ### Pipeline
 
 `leaps_discovery_screener` (discover) → `leaps_trade_readiness` (deep-dive and execute)
+
+`call_fan_discovery` (build multi-expiration fans for conviction tickers → portfolio plan)
 
 ### Supporting Files
 

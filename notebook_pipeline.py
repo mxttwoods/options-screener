@@ -594,3 +594,273 @@ def scenario_pnl_call(
         terminal = spot * (1.0 + move)
         out[label] = max(terminal - strike, 0.0) - premium
     return out
+
+
+# ---------------------------------------------------------------------------
+# Call-Fan helpers
+# ---------------------------------------------------------------------------
+
+
+def fetch_fan_candidates(
+    ticker: str,
+    *,
+    spot: float,
+    strike_range: tuple[float, float] | None = None,
+    moneyness_range: tuple[float, float] = (0.80, 1.10),
+    min_dte: int = 3,
+    max_dte: int = 760,
+    min_open_interest: int = 5,
+    min_volume: int = 1,
+    max_spread_pct: float = 0.60,
+    max_contracts_per_exp: int = 30,
+    rate_limit_sleep: float = 0.20,
+) -> pd.DataFrame:
+    """Fetch call contracts across **every** available expiration for *ticker*.
+
+    Unlike ``fetch_option_candidates`` (which buckets by horizon and caps
+    expirations), this function retrieves the full expiration calendar so
+    a continuous "fan" of calls can be assembled.
+
+    Parameters
+    ----------
+    strike_range : tuple[float, float] | None
+        Absolute dollar strike window, e.g. ``(500, 600)``.  When provided
+        this takes precedence over *moneyness_range*.
+    moneyness_range : tuple[float, float]
+        Fallback filter expressed as strike / spot ratio.
+    """
+    try:
+        t = yf.Ticker(ticker)
+        time.sleep(rate_limit_sleep)
+        all_exps = t.options
+        if not all_exps:
+            return pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+    today = date.today()
+    exp_pairs: list[tuple[str, int]] = []
+    for exp in all_exps:
+        try:
+            exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+            dte = (exp_date - today).days
+            if min_dte <= dte <= max_dte:
+                exp_pairs.append((exp, dte))
+        except Exception:
+            continue
+
+    exp_pairs.sort(key=lambda x: x[1])
+
+    if strike_range is not None:
+        lo_strike, hi_strike = strike_range
+    else:
+        lo_strike = spot * moneyness_range[0]
+        hi_strike = spot * moneyness_range[1]
+
+    all_rows: list[dict[str, Any]] = []
+    for exp_str, dte in exp_pairs:
+        try:
+            time.sleep(rate_limit_sleep)
+            chain = t.option_chain(exp_str)
+            frame = chain.calls
+            if frame is None or frame.empty:
+                continue
+
+            work = frame.copy()
+            work["mid"] = (work["bid"].fillna(0) + work["ask"].fillna(0)) / 2.0
+            work.loc[work["mid"] <= 0, "mid"] = work["lastPrice"]
+            work["spread"] = work["ask"].fillna(0) - work["bid"].fillna(0)
+            work["spread_pct"] = np.where(
+                work["mid"] > 0, work["spread"] / work["mid"], np.nan
+            )
+            work["moneyness"] = work["strike"] / spot
+
+            work = work[
+                (work["strike"] >= lo_strike)
+                & (work["strike"] <= hi_strike)
+                & (work["mid"] > 0)
+                & (work["impliedVolatility"] > 0)
+                & (work["openInterest"].fillna(0) >= min_open_interest)
+                & (work["volume"].fillna(0) >= min_volume)
+                & (work["spread_pct"].fillna(max_spread_pct + 1) <= max_spread_pct)
+            ]
+
+            if work.empty:
+                continue
+
+            work = work.sort_values(
+                ["openInterest", "volume", "mid"], ascending=[False, False, True]
+            ).head(max_contracts_per_exp)
+
+            # Label horizon bucket for downstream compatibility
+            if dte <= 35:
+                horizon = "short"
+            elif dte <= 140:
+                horizon = "medium"
+            else:
+                horizon = "leaps"
+
+            for _, row in work.iterrows():
+                all_rows.append(
+                    {
+                        "ticker": ticker,
+                        "side": "call",
+                        "horizon": horizon,
+                        "expiration": exp_str,
+                        "dte": int(dte),
+                        "contract_symbol": row.get("contractSymbol"),
+                        "strike": safe_float(row.get("strike"), 0.0),
+                        "mid": safe_float(row.get("mid"), np.nan),
+                        "bid": safe_float(row.get("bid"), np.nan),
+                        "ask": safe_float(row.get("ask"), np.nan),
+                        "iv": safe_float(row.get("impliedVolatility"), np.nan),
+                        "open_interest": safe_float(row.get("openInterest"), 0.0),
+                        "volume": safe_float(row.get("volume"), 0.0),
+                        "spread_pct": safe_float(row.get("spread_pct"), np.nan),
+                        "moneyness": safe_float(row.get("moneyness"), np.nan),
+                        "spot": spot,
+                    }
+                )
+        except Exception:
+            continue
+
+    return pd.DataFrame(all_rows)
+
+
+def _dte_label(dte: int) -> str:
+    """Human-readable expiration bucket."""
+    if dte <= 7:
+        return "0d-1w"
+    if dte <= 35:
+        return "1w-5w"
+    if dte <= 90:
+        return "5w-3m"
+    if dte <= 180:
+        return "3m-6m"
+    return "6m+"
+
+
+def build_best_fan(
+    scored_df: pd.DataFrame,
+    *,
+    max_legs: int = 8,
+) -> pd.DataFrame:
+    """Select the single best-scored contract per expiration to form a fan.
+
+    Returns a DataFrame with at most *max_legs* rows, ordered by DTE.
+    """
+    if scored_df.empty:
+        return pd.DataFrame()
+
+    fan = (
+        scored_df.sort_values("master_score", ascending=False)
+        .groupby("expiration", as_index=False)
+        .first()
+        .sort_values("dte")
+        .head(max_legs)
+        .reset_index(drop=True)
+    )
+    fan["leg"] = range(1, len(fan) + 1)
+    fan["dte_label"] = fan["dte"].apply(_dte_label)
+    return fan
+
+
+def score_fan(
+    fan_df: pd.DataFrame,
+    spot: float,
+    *,
+    r: float = 0.04,
+) -> dict[str, Any]:
+    """Compute aggregate fan-level metrics from a per-leg DataFrame.
+
+    Returns a dict with total cost, aggregate Greeks, IV term slope,
+    per-leg scenario P&L, and a composite fan score.
+    """
+    if fan_df.empty:
+        return {}
+
+    # --- Per-leg Greeks and scenario P&L ---
+    greeks_rows = []
+    scen_rows = []
+    for _, row in fan_df.iterrows():
+        g = bs_call_greeks(
+            spot=spot,
+            strike=float(row["strike"]),
+            dte=int(row["dte"]),
+            iv=float(row["iv"]),
+            r=r,
+        )
+        greeks_rows.append(g)
+        s = scenario_pnl_call(
+            spot=spot,
+            strike=float(row["strike"]),
+            premium=float(row["mid"]),
+            moves={
+                "bear_20": -0.20,
+                "bear_10": -0.10,
+                "flat": 0.0,
+                "bull_10": 0.10,
+                "bull_20": 0.20,
+            },
+        )
+        scen_rows.append(s)
+
+    greeks_df = pd.DataFrame(greeks_rows)
+    scen_df = pd.DataFrame(scen_rows)
+
+    total_premium = float(fan_df["mid"].sum())
+    total_cost = total_premium * 100.0  # per-contract lot
+
+    agg_delta = float(greeks_df["delta"].sum())
+    agg_gamma = float(greeks_df["gamma"].sum())
+    agg_theta = float(greeks_df["theta"].sum())
+    agg_vega = float(greeks_df["vega"].sum())
+
+    # IV term slope (simple linear regression of IV on DTE)
+    dte_arr = fan_df["dte"].values.astype(float)
+    iv_arr = fan_df["iv"].values.astype(float)
+    valid = ~(np.isnan(dte_arr) | np.isnan(iv_arr))
+    if valid.sum() >= 2:
+        x = dte_arr[valid]
+        y = iv_arr[valid]
+        slope = float(np.polyfit(x, y, 1)[0])
+    else:
+        slope = np.nan
+
+    # Composite fan score
+    avg_leg_score = (
+        float(fan_df["master_score"].mean())
+        if "master_score" in fan_df.columns
+        else 0.0
+    )
+    n_legs = len(fan_df)
+    leg_diversity = min(n_legs / 6.0, 1.0) * 100.0  # reward fans with 6+ legs
+    cost_efficiency = np.clip((1.0 - total_premium / (spot * 0.5)) * 100.0, 0, 100)
+    # Contango (negative slope) is favourable for long calls
+    term_score = np.clip(50 - slope * 5000, 0, 100) if not np.isnan(slope) else 50.0
+
+    fan_score = float(
+        0.40 * avg_leg_score
+        + 0.20 * cost_efficiency
+        + 0.20 * leg_diversity
+        + 0.20 * term_score
+    )
+
+    # Aggregate scenario P&L across legs
+    agg_scen = {col: float(scen_df[col].sum()) for col in scen_df.columns}
+
+    return {
+        "n_legs": n_legs,
+        "total_premium": total_premium,
+        "total_cost_100sh": total_cost,
+        "agg_delta": agg_delta,
+        "agg_gamma": agg_gamma,
+        "agg_theta": agg_theta,
+        "agg_vega": agg_vega,
+        "iv_term_slope": slope,
+        "avg_leg_score": avg_leg_score,
+        "fan_score": fan_score,
+        "scenario_pnl": agg_scen,
+        "greeks_df": greeks_df,
+        "scenario_df": scen_df,
+    }
