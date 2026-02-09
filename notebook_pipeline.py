@@ -277,6 +277,10 @@ def fetch_underlying_metrics(
                     "ret_6m": ret_6m,
                     "rsi_14": rsi_14,
                     "hv_30": hv_30,
+                    "target_mean": safe_float(info.get("targetMeanPrice")),
+                    "target_low": safe_float(info.get("targetLowPrice")),
+                    "target_high": safe_float(info.get("targetHighPrice")),
+                    "target_median": safe_float(info.get("targetMedianPrice")),
                 }
             )
         except Exception:
