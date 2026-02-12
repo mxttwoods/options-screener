@@ -1,10 +1,34 @@
 # Options Screener
-This repo is used to help me manage and find options trades.
+
+Utilities and notebooks to find, monitor, and manage options trades.
+
 ## Goal
-- To be a profitable options trader by buying stocks below fair value and selling at the mean/fair value.
-- The tickers in this repo have all been screened prior with morningstar and CFRA research.
-## Code
-- Help me by using cutting edge data science techniques to find the best trades.
-- Use different stock market signals like technical indicators, sentiment analysis, and fundamental analysis to find the best trades.
+
+- Be a profitable options trader by buying stocks below fair value and selling at or near fair value.
+- All tickers were pre-screened using Morningstar and CFRA research.
+
+## Notebooks
+
+- `options_monitor_v1_prob.ipynb` — Options position monitor & trading cheat sheet (refresh daily to update prices and analysis).
+- `call_fan_discovery_v2.ipynb` — Mix-DTE call discovery and broker-ready buy-list generator.
+
+## Quickstart
+
+1. Create and activate a virtual environment:
+
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   ```
+
+2. Install dependencies:
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. Open and run the notebooks in JupyterLab or Jupyter Notebook.
+
 ## Data
-- Most of this projects data is source via yfinance but we can use any free source of data.
+
+- Primary data is pulled with `yfinance`; additional free sources are allowed.
